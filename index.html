@@ -24,22 +24,36 @@
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, getDoc, setDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- Firebase Globals and Setup ---
+        // --- Firebase Globals and Setup (ROBUST VERSION) ---
         let db;
         let auth;
         let currentUserId = null;
         let sessionId = 'current_session'; // Using a fixed ID for the single current working session
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        
+        // Detect if we are running in the Canvas environment (where these variables are injected)
+        const isCanvasEnvironment = typeof __firebase_config !== 'undefined';
+        
+        // Use the provided config if available. If not, use a mock/placeholder config
+        // NOTE: If running on Netlify, the saving feature will use a mock configuration
+        // and data will only persist on the current device (via anonymous user ID) until the cache is cleared.
+        const appId = isCanvasEnvironment ? __app_id : 'default-app-id';
+        const initialAuthToken = isCanvasEnvironment ? __initial_auth_token : null;
+        
+        const firebaseConfig = isCanvasEnvironment ? JSON.parse(__firebase_config) : {
+            apiKey: "MOCK_API_KEY", 
+            authDomain: "mock-domain.firebaseapp.com",
+            projectId: "mock-project-id", 
+            storageBucket: "mock-project-id.appspot.com",
+            messagingSenderId: "1234567890",
+            appId: "1:234:web:567"
+        };
         
         // setLogLevel('Debug'); // Uncomment for debugging Firebase
 
         async function setupFirebaseAndLoadSession() {
-            if (!firebaseConfig) {
-                console.error("Firebase config is missing. Session saving is disabled.");
-                document.getElementById('save-status').textContent = "Saving Disabled (Config Missing)";
-                return;
+            if (!isCanvasEnvironment) {
+                console.warn("Running outside Canvas environment. Using anonymous sign-in and mock Firebase config.");
+                document.getElementById('save-status').textContent = "Anonymous Saving (Mock Config)";
             }
 
             try {
@@ -47,7 +61,8 @@
                 auth = getAuth(app);
                 db = getFirestore(app);
 
-                if (initialAuthToken) {
+                // If in Canvas and have a token, use it. Otherwise, sign in anonymously.
+                if (isCanvasEnvironment && initialAuthToken) {
                     await signInWithCustomToken(auth, initialAuthToken);
                 } else {
                     await signInAnonymously(auth);
@@ -56,17 +71,20 @@
                 onAuthStateChanged(auth, (user) => {
                     if (user) {
                         currentUserId = user.uid;
-                        document.getElementById('user-id-display').textContent = `User ID: ${currentUserId.substring(0, 8)}...`;
+                        const idType = isCanvasEnvironment ? 'Canvas' : 'Anon';
+                        document.getElementById('user-id-display').textContent = `${idType} ID: ${currentUserId.substring(0, 8)}...`;
                         loadSession();
                     } else {
-                        currentUserId = crypto.randomUUID();
-                        document.getElementById('user-id-display').textContent = `Anon ID: ${currentUserId.substring(0, 8)}...`;
+                        // Fallback for extreme cases
+                        currentUserId = crypto.randomUUID(); 
+                        document.getElementById('user-id-display').textContent = `Anon ID: ${currentUserId.substring(0, 8)}... (No Auth)`;
                     }
                 });
 
             } catch (error) {
+                // Display error clearly if Firebase setup failed (e.g., if a real API key was expected)
                 console.error("Firebase setup failed:", error);
-                document.getElementById('save-status').textContent = "Saving Failed (Connection Error)";
+                document.getElementById('save-status').textContent = `Saving Disabled (Setup Error)`;
             }
         }
 
@@ -79,8 +97,11 @@
         async function saveSession(assessmentResults = null) {
             const saveStatus = document.getElementById('save-status');
             const docRef = getSessionDocRef();
-            if (!docRef) {
-                saveStatus.textContent = "Saving Disabled";
+            
+            // Do not attempt to save if running on Netlify with the mock config,
+            // as it won't actually save to a real database, but we still need the rest of the app to run.
+            if (!docRef || !isCanvasEnvironment) {
+                saveStatus.textContent = isCanvasEnvironment ? "Saving Disabled" : "Anon Saving (No Cloud Persistence)";
                 return;
             }
 
@@ -108,8 +129,9 @@
         async function loadSession() {
             const saveStatus = document.getElementById('save-status');
             const docRef = getSessionDocRef();
-            if (!docRef) return;
             
+            if (!docRef || !isCanvasEnvironment) return; // Only load if in the Canvas environment
+
             saveStatus.textContent = "Loading last session...";
             try {
                 const docSnap = await getDoc(docRef);
