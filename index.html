@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NZ Curriculum Writing Progression Tool</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'nz-green': '#005b4b', // Deep green for primary action/header
+                        'nz-gold': '#ffc72c', // Gold for accents/highlights
+                        'nz-light': '#e6f6f3', // Very light green for subtle backgrounds
+                    }
+                }
+            }
+        }
+    </script>
+    <script type="module">
+        // --- Firebase Imports ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Firebase Globals and Setup ---
+        let db;
+        let auth;
+        let currentUserId = null;
+        let sessionId = 'current_session'; // Using a fixed ID for the single current working session
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        
+        // setLogLevel('Debug'); // Uncomment for debugging Firebase
+
+        async function setupFirebaseAndLoadSession() {
+            if (!firebaseConfig) {
+                console.error("Firebase config is missing. Session saving is disabled.");
+                document.getElementById('save-status').textContent = "Saving Disabled (Config Missing)";
+                return;
+            }
+
+            try {
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        currentUserId = user.uid;
+                        document.getElementById('user-id-display').textContent = `User ID: ${currentUserId.substring(0, 8)}...`;
+                        loadSession();
+                    } else {
+                        currentUserId = crypto.randomUUID();
+                        document.getElementById('user-id-display').textContent = `Anon ID: ${currentUserId.substring(0, 8)}...`;
+                    }
+                });
+
+            } catch (error) {
+                console.error("Firebase setup failed:", error);
+                document.getElementById('save-status').textContent = "Saving Failed (Connection Error)";
+            }
+        }
+
+        function getSessionDocRef() {
+            if (!db || !currentUserId) return null;
+            // Private data path: /artifacts/{appId}/users/{userId}/sessions/{sessionId}
+            return doc(db, 'artifacts', appId, 'users', currentUserId, 'sessions', sessionId);
+        }
+
+        async function saveSession(assessmentResults = null) {
+            const saveStatus = document.getElementById('save-status');
+            const docRef = getSessionDocRef();
+            if (!docRef) {
+                saveStatus.textContent = "Saving Disabled";
+                return;
+            }
+
+            const dataToSave = {
+                timestamp: Date.now(),
+                input: {
+                    writingSample: document.getElementById('writing-sample').value.trim(),
+                    yearLevel: document.getElementById('curriculum-year').value,
+                    textType: document.getElementById('text-type').value, // Now reading from select
+                    hasImage: !!base64Image, // Do not save the image data itself
+                },
+                assessment: assessmentResults,
+            };
+
+            saveStatus.textContent = "Saving...";
+            try {
+                await setDoc(docRef, dataToSave);
+                saveStatus.textContent = "Saved!";
+            } catch (e) {
+                console.error("Error saving document: ", e);
+                saveStatus.textContent = "Save Error";
+            }
+        }
+
+        async function loadSession() {
+            const saveStatus = document.getElementById('save-status');
+            const docRef = getSessionDocRef();
+            if (!docRef) return;
+            
+            saveStatus.textContent = "Loading last session...";
+            try {
+                const docSnap = await getDoc(docRef);
+
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    
+                    // Load Input
+                    if (data.input) {
+                        document.getElementById('writing-sample').value = data.input.writingSample || '';
+                        document.getElementById('curriculum-year').value = data.input.yearLevel || 'year4';
+                        document.getElementById('text-type').value = data.input.textType || 'Inform'; // Default for new dropdown
+                    }
+
+                    // Load Output (if assessment exists)
+                    if (data.assessment) {
+                        updateUIWithAssessment(data.assessment);
+                        document.getElementById('assessment-output').classList.remove('hidden');
+                    }
+                    
+                    saveStatus.textContent = "Session Loaded!";
+                } else {
+                    saveStatus.textContent = "New Session";
+                }
+            } catch (e) {
+                console.error("Error loading document: ", e);
+                saveStatus.textContent = "Load Error";
+            }
+        }
+        
+        // Add a function to update the UI specifically for loaded data
+        function updateUIWithAssessment(assessment) {
+            
+            const levelElement = document.getElementById('level-assessment');
+            levelElement.textContent = assessment.level_assessment;
+
+            // Color coding the assessment level
+            const levelLower = assessment.level_assessment.toLowerCase();
+            if (levelLower.includes('exceeds')) {
+                levelElement.className = 'text-3xl font-extrabold text-center py-4 rounded-xl bg-green-100 text-green-700 border-2 border-green-500';
+            } else if (levelLower.includes('meets')) {
+                levelElement.className = 'text-3xl font-extrabold text-center py-4 rounded-xl bg-blue-100 text-blue-700 border-2 border-blue-500';
+            } else {
+                levelElement.className = 'text-3xl font-extrabold text-center py-4 rounded-xl bg-red-100 text-red-700 border-2 border-red-500';
+            }
+            
+            // 1. Update Teacher Feedback (7 Categories - Now Concise)
+            document.getElementById('transcription_handwriting_feedback').textContent = assessment.transcription_handwriting_feedback;
+            document.getElementById('transcription_spelling_feedback').textContent = assessment.transcription_spelling_feedback;
+            document.getElementById('composition_audience_feedback').textContent = assessment.composition_audience_feedback;
+            document.getElementById('composition_sentence_feedback').textContent = assessment.composition_sentence_feedback;
+            document.getElementById('composition_genre_feedback').textContent = assessment.composition_genre_feedback;
+            document.getElementById('composition_word_choice_feedback').textContent = assessment.composition_word_choice_feedback;
+            document.getElementById('composition_devices_feedback').textContent = assessment.composition_devices_feedback;
+
+
+            // 2. Update Student Feedback (2 Stars, 1 Next Step)
+            if (assessment.student_feedback) {
+                const studentFeedbackHtml = `
+                    <ul class="list-none space-y-3">
+                        <li class="flex items-start">
+                            <span class="text-xl mr-2 text-nz-gold">⭐</span>
+                            <div>
+                                <strong class="text-nz-gold">Ka Pai!</strong> ${assessment.student_feedback.star1}
+                            </div>
+                        </li>
+                        <li class="flex items-start">
+                            <span class="text-xl mr-2 text-nz-gold">⭐</span>
+                            <div>
+                                <strong class="text-nz-gold">Ka Pai!</strong> ${assessment.student_feedback.star2}
+                            </div>
+                        </li>
+                        <li class="flex items-start">
+                            <span class="text-xl mr-2 text-nz-green">➡️</span>
+                            <div>
+                                <strong class="text-nz-green">Next Step:</strong> ${assessment.student_feedback.next_step}
+                            </div>
+                        </li>
+                    </ul>
+                `;
+                document.getElementById('student-feedback').innerHTML = studentFeedbackHtml;
+            }
+        }
+
+        // Call setup on window load
+        window.onload = setupFirebaseAndLoadSession;
+
+        // --- Existing Global Variables and Tool Logic ---
+        
+        let base64Image = null;
+        let imageMimeType = null;
+        let studentWritingSample = "";
+        
+        const apiKey = "" 
+        const textModel = 'gemini-2.5-flash-preview-05-20';
+        const ttsModel = 'gemini-2.5-flash-preview-tts';
+        const textApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${textModel}:generateContent?key=${apiKey}`;
+        const ttsApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${ttsModel}:generateContent?key=${apiKey}`;
+
+        // --- Helper Function for Exponential Backoff and Fetch ---
+        async function fetchWithBackoff(url, options, maxRetries = 5) {
+            for (let attempt = 0; attempt < maxRetries; attempt++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (response.status === 429 && attempt < maxRetries - 1) {
+                        const delay = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        continue;
+                    }
+                    if (!response.ok) {
+                        throw new Error(`API request failed with status ${response.status}: ${await response.text()}`);
+                    }
+                    return response;
+                } catch (error) {
+                    if (attempt === maxRetries - 1) {
+                        throw error;
+                    }
+                    const delay = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        }
+        
+        // --- Image Handling Functions ---
+        window.handleImageChange = function(event) {
+            const file = event.target.files[0];
+            const preview = document.getElementById('image-preview');
+            const textArea = document.getElementById('writing-sample');
+            const uploadText = document.getElementById('upload-text');
+
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    preview.src = e.target.result;
+                    preview.classList.remove('hidden');
+                    base64Image = e.target.result.split(',')[1];
+                    imageMimeType = file.type;
+                    
+                    // Clear text area and disable it if an image is uploaded
+                    textArea.value = '';
+                    textArea.placeholder = 'Text area disabled (Image selected)';
+                    textArea.disabled = true;
+                    uploadText.textContent = `Image selected: ${file.name}`;
+                    saveSession(); // Save input change
+                };
+                reader.readAsDataURL(file);
+            } else {
+                // If the file is cleared
+                base64Image = null;
+                imageMimeType = null;
+                preview.classList.add('hidden');
+                preview.src = '';
+                textArea.disabled = false;
+                textArea.placeholder = "Paste the student's writing here... (Image input is preferred if available)";
+                uploadText.textContent = 'Click here to upload an image of the writing';
+                saveSession(); // Save input change
+            }
+        }
+
+        // --- TTS Helper Functions ---
+        function base64ToArrayBuffer(base64) {
+            const binaryString = atob(base64);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            return bytes.buffer;
+        }
+
+        function pcmToWav(pcm16, sampleRate) {
+            const numChannels = 1;
+            const bytesPerSample = 2; // 16-bit PCM
+            const blockAlign = numChannels * bytesPerSample;
+            const byteRate = sampleRate * blockAlign;
+            const dataSize = pcm16.length * bytesPerSample;
+            const buffer = new ArrayBuffer(44 + dataSize);
+            const view = new DataView(buffer);
+            let offset = 0;
+
+            // RIFF chunk
+            view.setUint32(offset, 0x52494646, false); // "RIFF"
+            offset += 4;
+            view.setUint32(offset, 36 + dataSize, true); // ChunkSize
+            offset += 4;
+            view.setUint32(offset, 0x57415645, false); // "WAVE"
+            offset += 4;
+
+            // FMT chunk
+            view.setUint32(offset, 0x666d7420, false); // "fmt "
+            offset += 4;
+            view.setUint32(offset, 16, true); // Subchunk1Size (16 for PCM)
+            offset += 4;
+            view.setUint16(offset, 1, true); // AudioFormat (1 for PCM)
+            offset += 2;
+            view.setUint16(offset, numChannels, true); // NumChannels
+            offset += 2;
+            view.setUint32(offset, sampleRate, true); // SampleRate
+            offset += 4;
+            view.setUint32(offset, byteRate, true); // ByteRate
+            offset += 4;
+            view.setUint16(offset, blockAlign, true); // BlockAlign
+            offset += 2;
+            view.setUint16(offset, 16, true); // BitsPerSample (16)
+            offset += 2;
+
+            // DATA chunk
+            view.setUint32(offset, 0x64617461, false); // "data"
+            offset += 4;
+            view.setUint32(offset, dataSize, true); // Subchunk2Size
+            offset += 4;
+
+            // Write PCM data
+            for (let i = 0; i < pcm16.length; i++) {
+                view.setInt16(offset, pcm16[i], true);
+                offset += 2;
+            }
+
+            return new Blob([view], { type: 'audio/wav' });
+        }
+
+
+        // --- TTS Implementation ---
+        window.playTtsFeedback = async function() {
+            const ttsButton = document.getElementById('tts-button');
+            const studentFeedbackElement = document.getElementById('student-feedback');
+            
+            // Extract text from the structured list items
+            const star1 = studentFeedbackElement.querySelector('ul li:nth-child(1) div').textContent.trim();
+            const star2 = studentFeedbackElement.querySelector('ul li:nth-child(2) div').textContent.trim();
+            const nextStep = studentFeedbackElement.querySelector('ul li:nth-child(3) div').textContent.trim();
+            
+            if (!star1) {
+                console.error("No student feedback to read.");
+                return;
+            }
+
+            // Construct reading script with Te Reo and clear flow
+            const ttsPrompt = `Say cheerfully: Tino pai! I have two stars for you. Star one: ${star1}. Star two: ${star2}. Your next step is: ${nextStep}. Kia Kaha! (Be strong!).`;
+
+            // UI State: Loading
+            ttsButton.disabled = true;
+            ttsButton.textContent = 'Speaking...';
+            
+            try {
+                const payload = {
+                    contents: [{ parts: [{ text: ttsPrompt }] }],
+                    generationConfig: {
+                        responseModalities: ["AUDIO"],
+                        speechConfig: {
+                            voiceConfig: {
+                                prebuiltVoiceConfig: { voiceName: "Kore" }
+                            }
+                        }
+                    }
+                };
+                
+                const response = await fetchWithBackoff(ttsApiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await response.json();
+                const part = result?.candidates?.[0]?.content?.parts?.[0];
+                const audioData = part?.inlineData?.data;
+                const mimeType = part?.inlineData?.mimeType;
+
+                if (audioData && mimeType && mimeType.startsWith("audio/L16")) {
+                    const sampleRateMatch = mimeType.match(/rate=(\d+)/);
+                    const sampleRate = sampleRateMatch ? parseInt(sampleRateMatch[1], 10) : 24000; 
+
+                    const pcmData = base64ToArrayBuffer(audioData);
+                    const pcm16 = new Int16Array(pcmData);
+                    const wavBlob = pcmToWav(pcm16, sampleRate);
+                    const audioUrl = URL.createObjectURL(wavBlob);
+                    
+                    const audio = new Audio(audioUrl);
+                    audio.play();
+
+                    audio.onended = () => {
+                        ttsButton.textContent = '✨ Speak';
+                        ttsButton.disabled = false;
+                        URL.revokeObjectURL(audioUrl); // Clean up
+                    };
+                } else {
+                    throw new Error("TTS API returned invalid or missing audio data.");
+                }
+
+            } catch (error) {
+                console.error("TTS Error:", error);
+                // Use custom modal or text update instead of alert
+                document.getElementById('tts-status').textContent = "Speech failed. Check console for details.";
+            } finally {
+                // Ensure button is re-enabled if an error occurs before audio starts
+                if (ttsButton.textContent === 'Speaking...') {
+                    ttsButton.textContent = '✨ Speak';
+                    ttsButton.disabled = false;
+                }
+            }
+        }
+
+
+        // --- Revision Assistant Implementation ---
+        window.generateRevision = async function() {
+            const revisionButton = document.getElementById('revision-button');
+            const revisionLoading = document.getElementById('revision-loading');
+            const revisionOutput = document.getElementById('revision-output-section');
+            const revisionText = document.getElementById('revision-text');
+            
+            const writingSample = document.getElementById('writing-sample').value.trim();
+            // Find the most relevant next step from the 7 teacher points, or use the student 'Next Step' as fallback.
+            const nextStepText = document.getElementById('student-feedback').querySelector('ul li:nth-child(3) div').textContent.trim();
+            const yearLevel = document.getElementById('curriculum-year').value;
+
+            if (!writingSample || !nextStepText) {
+                // Use custom modal or text update instead of alert
+                document.getElementById('revision-status').textContent = "Please run the initial assessment first and ensure you have provided the writing sample text.";
+                return;
+            }
+
+            // UI State: Loading
+            revisionButton.disabled = true;
+            revisionButton.textContent = 'Generating Model...';
+            revisionLoading.classList.remove('hidden');
+            revisionOutput.classList.remove('hidden');
+            revisionText.textContent = 'Please wait...';
+            document.getElementById('revision-status').textContent = '';
+
+            try {
+                const criteria = curriculumCriteria[yearLevel];
+
+                const prompt = `You are a writing coach. The student wrote the following text (Student Writing), and the student's **Next Step** is: "${nextStepText}". Rewrite the first one to three paragraphs of the student's writing to model how they could apply this specific Next Step to reach the expected progression level (${criteria.level}). The output must be ONLY the revised text.
+
+                TARGET PROGRESSION: ${criteria.criteria}
+                
+                --- STUDENT WRITING ---
+                ${writingSample}
+
+                --- INSTRUCTIONAL FOCUS (Next Step to apply) ---
+                ${nextStepText}`;
+                
+                const payload = {
+                    contents: [{ parts: [{ text: prompt }] }],
+                    systemInstruction: { parts: [{ text: "You are a writing coach. Only respond with the revised, model text, demonstrating the improvement specified by the 'Next Step'." }] },
+                };
+
+                const response = await fetchWithBackoff(textApiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await response.json();
+                const revisedText = result.candidates?.[0]?.content?.parts?.[0]?.text || "Sorry, I couldn't generate a revision model right now. Try adjusting the input text.";
+                
+                revisionText.textContent = revisedText;
+
+            } catch (error) {
+                console.error("Revision Error:", error);
+                revisionText.textContent = "Error generating revision model. Please try again.";
+            } finally {
+                // UI State: Reset
+                revisionButton.disabled = false;
+                revisionButton.textContent = '✨ Generate Revision Model';
+                revisionLoading.classList.add('hidden');
+            }
+        }
+
+
+        // --- Curriculum Criteria Synthesis (Updated to Year-by-Year Progression) ---
+        const curriculumCriteria = {
+            year1: {
+                level: "Year 1 (Phase 1: Emerging Literacy)",
+                criteria: `Focus: Early composition and foundational literacy skills.
+                - Understand/Know (Ideas/Structure): Can form simple ideas related to personal experiences. Uses pictures and initial sounds/letters to represent words. Understands writing goes from left to right.
+                - Do (Language/Conventions): Forms recognizable letters and uses some high-frequency words. Uses capital letters and full stops inconsistently or is still developing this convention. Uses simple sentences.`
+            },
+            year2: {
+                level: "Year 2 (Phase 1: Developing Conventions)",
+                criteria: `Focus: Developing conventions and expanding on ideas.
+                - Understand/Know (Ideas/Structure): Expresses clear but simple ideas. Begins to use some simple sequencing (e.g., 'next, then'). Attempts to write for a known audience (e.g., a letter to Mum).
+                - Do (Language/Conventions): Uses capital letters and full stops more consistently. Spells common high-frequency words and uses known spelling patterns. Begins to use spacing between words and forms simple sentences accurately.`
+            },
+            year3: {
+                level: "Year 3 (Phase 1: Early Fluency)",
+                criteria: `Focus: Consolidating structure and extending sentence length.
+                - Understand/Know (Ideas/Structure): Ideas are clearer and supported by a few basic details. Shows awareness of structure for the text type (e.g., a simple recount, a short narrative). Can write simple paragraphs (a few related sentences).
+                - Do (Language/Conventions): Uses more varied vocabulary, including some descriptive words. Uses compound sentences with simple conjunctions like 'and' or 'but'. Conventions (punctuation, spelling of common words) are largely accurate.`
+            },
+            year4: {
+                level: "Year 4 (Phase 2: Expanding Horizons)",
+                criteria: `Focus: Introducing complexity in structure and language.
+                - Understand/Know (Ideas/Structure): Creates texts with a clear purpose and audience in mind. Uses more developed sequencing and begins to incorporate causal relationships (e.g., 'because'). The text has a discernible beginning, middle, and end.
+                - Do (Language/Conventions): Uses precise verbs, nouns, and adjectives. Starts to use a variety of sentence beginnings and formats (e.g., questions, exclamations). Accurately uses basic punctuation and begins to attempt dialogue.`
+            },
+            year5: {
+                level: "Year 5 (Phase 2: Consolidating Complexity)",
+                criteria: `Focus: Developing cohesion and using complex sentences.
+                - Understand/Know (Ideas/Structure): Ideas are supported with relevant details and some personal comment/opinion. Uses paragraphs effectively to group related ideas. Shows strong control of sequencing and causal relationships throughout the text.
+                - Do (Language/Conventions): Uses complex sentences with subordinating conjunctions (e.g., 'when', 'although', 'if'). Uses more specialized vocabulary related to the text type (e.g., content-area vocabulary). Dialogue punctuation is becoming more accurate. Edits and revises work for clarity and sentence flow.`
+            },
+            year6: {
+                level: "Year 6 (Phase 2: Proficient Writing)",
+                criteria: `Focus: Sustained writing, structural control, and sophisticated vocabulary.
+                - Understand/Know (Ideas/Structure): Writes sustained, lengthy texts with clear purpose and structural integrity. Ideas are logically linked using cohesive devices (e.g., 'in contrast', 'furthermore'). Maintains a consistent point of view and tone.
+                - Do (Language/Conventions): Uses a wide range of sentence structures effectively for impact. Selects powerful, precise vocabulary for audience and purpose. Accurately uses a range of punctuation, including commas in lists and for simple clauses, and apostrophes for possession.`
+            },
+            year7: {
+                level: "Year 7 (Phase 3: Disciplinary Writing and Criticality)",
+                criteria: `Focus: Writing for learning across subjects and critiquing texts.
+                - Understand/Know (Ideas/Structure): Formulates complex ideas, supporting them with evidence or arguments. Begins to use specialized language/structure appropriate for other learning areas (disciplinary literacy). Manages shifts in time and focus within the text effectively.
+                - Do (Language/Conventions): Consistently uses complex and compound sentences. Uses cohesive devices to link paragraphs and ideas logically. Punctuation is accurate, including advanced use of apostrophes (plural possession) and quotation marks for direct speech/quotes.`
+            },
+            year8: {
+                level: "Year 8 (Phase 3: Expert Writing and Manipulation)",
+                criteria: `Focus: Manipulating text features and constructing complex analysis.
+                - Understand/Know (Ideas/Structure): Formulates and expresses complex ideas, supporting them with detailed analysis and evidence. Critically manipulates text structure and language features for deliberate effect on the audience.
+                - Do (Language/Conventions): Selects and uses sophisticated, precise vocabulary. Demonstrates mastery of a wide range of complex sentence structures, varying length and beginning for rhetorical impact. Punctuation is consistently accurate for all purposes (including correct use of semi-colons, dashes, etc.).`
+            }
+        };
+
+
+        // --- Main Assessment Function (Updated systemPrompt and save call) ---
+        window.handleAssessment = async function() {
+            studentWritingSample = document.getElementById('writing-sample').value.trim();
+            const yearKey = document.getElementById('curriculum-year').value;
+            const textType = document.getElementById('text-type').value; // Now reading from select
+            const criteria = curriculumCriteria[yearKey];
+            
+            const assessButton = document.getElementById('assess-button');
+            const loadingMessage = document.getElementById('loading-message');
+            const outputDiv = document.getElementById('assessment-output');
+            
+            if (!base64Image && studentWritingSample.length < 50) {
+                // Use custom modal or text update instead of alert
+                loadingMessage.textContent = "Please provide a photo or paste text of at least 50 words.";
+                loadingMessage.classList.remove('hidden');
+                setTimeout(() => loadingMessage.classList.add('hidden'), 3000);
+                return;
+            }
+
+            // UI State: Loading
+            assessButton.disabled = true;
+            assessButton.textContent = 'Assessing...';
+            loadingMessage.textContent = 'Analyzing writing... Kia manawanui (Be patient).';
+            loadingMessage.classList.remove('hidden');
+            outputDiv.classList.add('hidden');
+            document.getElementById('revision-output-section').classList.add('hidden'); // Hide previous revision
+            
+            // --- API Prompt and Payload Construction ---
+            
+            const systemPrompt = `You are a world-class educational assessor and curriculum expert for the New Zealand Ministry of Education. Your task is to analyze a student's writing against the specific, year-by-year achievement objectives (Tuhituhi progression) for the specified year level, using the following seven key categories.
+
+            **Assessment Categories (Pillars):**
+            1. **Transcription: Handwriting** (Legibility, letter formation, fluency)
+            2. **Transcription: Spelling** (Use of known patterns, high-frequency words, accuracy)
+            3. **Composition: Audience, Purpose, and Task** (Relevance, clarity of message, meeting the prompt)
+            4. **Composition: Sentence Structure and Punctuation** (Sentence variety, grammatical accuracy, use of basic punctuation)
+            5. **Composition: Writing to Inform, Entertain, and Persuade (Genre/Structure)** (Genre structure, effective use of text features)
+            6. **Writing Craft: Word Choices** (Vocabulary, precision, impact, noun/verb selection)
+            7. **Writing Craft: Language Features and Devices** (Figurative language, imagery, rhetorical devices, voice)
+
+            **Your response MUST be a single JSON object structured exactly according to the schema provided.**
+
+            **CRITICAL INSTRUCTION FOR TEACHER FEEDBACK:** For the seven specific feedback points, you MUST provide a **single, highly concise, and specific instructional next step** designed for a teacher. This next step should be brief enough to fit on a professional development card or as a quick note (e.g., "Model complex sentence starters using 'although', 'since', and 'while'.", not a full paragraph).
+
+            CURRICULUM CRITERIA (Targeting ${criteria.level}):
+            ${criteria.criteria}
+
+            ASSESSMENT TASK:
+            1. Determine if the writing 'Exceeds Expectations', 'Meets Expectations', or 'Requires Further Development' for the target year level based on a holistic view.
+            2. Generate professional, actionable, and **CONCISE** next steps for the teacher for **EACH of the seven categories listed above**.
+            3. Generate highly encouraging, kid-friendly feedback for the student using the **Two Stars and a Wish** format. Use Te Reo Māori: Star 1 & 2 start with **'Ka Pai!'**; Next Step starts with **'Whaia te iti kahurangi'**.
+
+            DO NOT include any text outside the JSON structure.
+            `;
+
+            let userQuery = `Assess this writing sample against the criteria for ${criteria.level} and the text purpose "${textType}". `;
+            
+            let contentParts = [];
+
+            if (base64Image) {
+                // If using an image, the model will extract the text.
+                userQuery += "The writing is provided as an image. Analyze the text content visible in the image."
+                contentParts.push({ text: userQuery });
+                contentParts.push({
+                    inlineData: {
+                        mimeType: imageMimeType,
+                        data: base64Image
+                    }
+                });
+            } else {
+                // If using text area input
+                userQuery += `The writing is provided as text:\n\n--- STUDENT WRITING ---\n\n${studentWritingSample}`;
+                contentParts.push({ text: userQuery });
+            }
+
+            const payload = {
+                contents: [{ role: "user", parts: contentParts }],
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+                generationConfig: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "OBJECT",
+                        properties: {
+                            "level_assessment": {
+                                "type": "STRING",
+                                "description": "A single sentence overall assessment (Exceeds, Meets, or Requires Further Development)."
+                            },
+                            "student_feedback": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "star1": { "type": "STRING", "description": "The first positive point (Star)." },
+                                    "star2": { "type": "STRING", "description": "The second positive point (Star)." },
+                                    "next_step": { "type": "STRING", "description": "The single, clear, actionable next step (Wish)." }
+                                },
+                                "required": ["star1", "star2", "next_step"]
+                            },
+                            "transcription_handwriting_feedback": { "type": "STRING", "description": "CONCISE teaching feedback for Transcription: Handwriting." },
+                            "transcription_spelling_feedback": { "type": "STRING", "description": "CONCISE teaching feedback for Transcription: Spelling." },
+                            "composition_audience_feedback": { "type": "STRING", "description": "CONCISE teaching feedback for Composition: Audience, Purpose, and Task." },
+                            "composition_sentence_feedback": { "type": "STRING", "description": "CONCISE teaching feedback for Composition: Sentence Structure and Punctuation." },
+                            "composition_genre_feedback": { "type": "STRING", "description": "CONCISE teaching feedback for Composition: Writing to Inform/Entertain/Persuade (Genre)." },
+                            "composition_word_choice_feedback": { "type": "STRING", "description": "CONCISE teaching feedback for Writing Craft: Word Choices." },
+                            "composition_devices_feedback": { "type": "STRING", "description": "CONCISE teaching feedback for Writing Craft: Language Features and Devices." }
+                        },
+                        "required": [
+                            "level_assessment", "student_feedback", 
+                            "transcription_handwriting_feedback", "transcription_spelling_feedback", 
+                            "composition_audience_feedback", "composition_sentence_feedback", 
+                            "composition_genre_feedback", "composition_word_choice_feedback",
+                            "composition_devices_feedback"
+                        ]
+                    }
+                }
+            };
+
+            // --- API Call Execution ---
+            try {
+                const response = await fetchWithBackoff(textApiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await response.json();
+                const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                if (!jsonText) {
+                    throw new Error("Gemini API returned no text content or an incomplete structure.");
+                }
+
+                const assessment = JSON.parse(jsonText);
+                
+                // Update UI with results using the unified function
+                updateUIWithAssessment(assessment);
+
+                outputDiv.classList.remove('hidden');
+                
+                // --- CRITICAL: Save the session data including the new assessment results ---
+                saveSession(assessment);
+
+                // Scroll to the results
+                outputDiv.scrollIntoView({ behavior: 'smooth' });
+
+            } catch (error) {
+                console.error("Assessment Error:", error);
+                // Use custom modal or text update instead of alert
+                loadingMessage.textContent = "Error: Assessment failed. Check console for details or try again.";
+            } finally {
+                // UI State: Reset
+                assessButton.disabled = false;
+                assessButton.textContent = 'Assess Writing';
+                loadingMessage.classList.add('hidden');
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #f3f4f6;
+            font-family: 'Inter', sans-serif;
+        }
+        .card {
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+        .feedback-item {
+            border-left: 4px solid;
+            padding-left: 1rem;
+            margin-bottom: 0.75rem; /* Reduced margin for tighter grouping */
+            background-color: #ffffff;
+            padding: 1rem;
+            border-radius: 0.5rem;
+        }
+        .teacher-feedback-color { border-left-color: #005b4b; /* NZ Green */ }
+        .file-upload-label {
+            cursor: pointer;
+            transition: background-color 0.15s;
+        }
+        .file-upload-label:hover {
+            background-color: #e5e7eb;
+        }
+        .section-header {
+            background-color: #e6f6f3;
+            padding: 0.75rem;
+            border-radius: 0.5rem;
+        }
+        .pillar-group-header {
+            font-weight: 700;
+            color: #005b4b;
+            border-bottom: 2px solid #e6f6f3;
+            padding-bottom: 0.5rem;
+            margin-top: 1rem;
+            margin-bottom: 0.5rem;
+        }
+    </style>
+</head>
+<body class="p-4 sm:p-8">
+
+    <div class="max-w-4xl mx-auto">
+        <header class="text-center mb-10">
+            <h1 class="text-3xl sm:text-4xl font-extrabold text-nz-green mb-2">
+                Tuhituhi: Writing Progression Assessor
+            </h1>
+            <p class="text-gray-600 font-medium">Analyze writing from text or images using the Refreshed NZ Curriculum</p>
+        </header>
+
+        <div id="assessment-input" class="bg-white p-6 sm:p-8 rounded-xl card mb-8">
+            <div class="flex justify-between items-start mb-4">
+                 <h2 class="text-2xl font-semibold text-gray-800">1. Provide Writing Sample</h2>
+                 <div class="text-right text-xs">
+                    <p id="save-status" class="font-bold text-gray-500">Initializing...</p>
+                    <p id="user-id-display" class="text-gray-400"></p>
+                </div>
+            </div>
+            
+            <!-- Image Upload Section -->
+            <div class="mb-6 border-2 border-dashed border-gray-300 rounded-lg p-4 text-center">
+                <label for="file-upload" class="file-upload-label block w-full py-4 text-nz-green font-semibold">
+                    <input id="file-upload" type="file" accept="image/*" class="hidden" onchange="handleImageChange(event)">
+                    <svg class="w-8 h-8 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                    <span id="upload-text">Click here to upload an image of the writing</span>
+                </label>
+                <img id="image-preview" class="mt-4 max-h-64 w-auto mx-auto rounded-lg hidden" src="" alt="Writing Preview">
+            </div>
+
+            <p class="text-center text-sm text-gray-500 mb-4 font-bold">OR</p>
+
+            <!-- Text Area Input -->
+            <label for="writing-sample" class="block text-sm font-medium text-gray-700 mb-2">Paste Writing Text Here</label>
+            <textarea id="writing-sample" rows="6" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-nz-green focus:border-nz-green resize-none text-gray-800" placeholder="Paste the student's writing here... (Image input is preferred if available)" oninput="saveSession()"></textarea>
+
+            <div class="flex flex-col sm:flex-row gap-4 mt-4">
+                <div class="flex-1">
+                    <label for="curriculum-year" class="block text-sm font-medium text-gray-700 mb-2">Target Year Level</label>
+                    <select id="curriculum-year" class="w-full p-3 border border-gray-300 rounded-lg bg-white focus:ring-nz-green focus:border-nz-green text-gray-800" onchange="saveSession()">
+                        <option value="year1">Year 1</option>
+                        <option value="year2">Year 2</option>
+                        <option value="year3">Year 3</option>
+                        <option value="year4" selected>Year 4</option>
+                        <option value="year5">Year 5</option>
+                        <option value="year6">Year 6</option>
+                        <option value="year7">Year 7</option>
+                        <option value="year8">Year 8</option>
+                    </select>
+                </div>
+                <div class="flex-1">
+                    <label for="text-type" class="block text-sm font-medium text-gray-700 mb-2">Text Purpose / Genre</label>
+                    <select id="text-type" class="w-full p-3 border border-gray-300 rounded-lg bg-white focus:ring-nz-green focus:border-nz-green text-gray-800" onchange="saveSession()">
+                        <option value="Inform" selected>Inform (e.g., Explanation, Report, Recount)</option>
+                        <option value="Entertain">Entertain (e.g., Narrative, Poetry, Drama)</option>
+                        <option value="Persuade">Persuade (e.g., Argument, Review, Advert)</option>
+                    </select>
+                </div>
+            </div>
+
+            <button id="assess-button" onclick="handleAssessment()" class="mt-6 w-full px-6 py-3 bg-nz-green text-white font-bold rounded-xl hover:bg-opacity-90 transition duration-150 ease-in-out disabled:opacity-50">
+                Assess Writing
+            </button>
+            
+            <p id="loading-message" class="text-center text-sm text-nz-green mt-3 hidden">Analyzing writing... Kia manawanui (Be patient).</p>
+        </div>
+
+        <div id="assessment-output" class="hidden">
+            <h2 class="text-3xl font-bold text-nz-green mb-6 border-b pb-2">2. Assessment Results</h2>
+
+            <!-- Overall Assessment -->
+            <div class="bg-white p-6 sm:p-8 rounded-xl card mb-8">
+                <h3 class="text-xl font-bold mb-3 text-gray-800 flex items-center">
+                    <svg class="w-6 h-6 mr-2 text-nz-gold" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    Overall Progression Status
+                </h3>
+                <p id="level-assessment" class="text-3xl font-extrabold text-center py-4 rounded-lg"></p>
+            </div>
+
+            <!-- Teacher Feedback (Categorized) -->
+            <div class="bg-white p-6 sm:p-8 rounded-xl card mb-8">
+                <h3 class="text-xl font-bold mb-4 text-nz-green section-header flex items-center">
+                    <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20v-2c0-.656-.126-1.283-.356-1.857m0 0a5.002 5.002 0 019.288 0M10 20l-1-1v-1m-1 0h.01"></path></svg>
+                    Teacher Next Steps: Tuhituhi Focus (7 Pillars)
+                </h3>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-x-4">
+                    <!-- PILLAR GROUP 1: TRANSCRIPTION -->
+                    <div class="md:col-span-2 pillar-group-header">Pillar 1: Transcription (Legibility & Conventions)</div>
+                    <div class="feedback-item teacher-feedback-color">
+                        <h5 class="font-semibold text-nz-green text-sm">1. Handwriting</h5>
+                        <p id="transcription_handwriting_feedback" class="text-gray-700 mt-1 font-medium"></p>
+                    </div>
+                    <div class="feedback-item teacher-feedback-color">
+                        <h5 class="font-semibold text-nz-green text-sm">2. Spelling</h5>
+                        <p id="transcription_spelling_feedback" class="text-gray-700 mt-1 font-medium"></p>
+                    </div>
+
+                    <!-- PILLAR GROUP 2: COMPOSITION (STRUCTURE) -->
+                    <div class="md:col-span-2 pillar-group-header">Pillar 2: Composition (Ideas, Structure & Flow)</div>
+                    <div class="feedback-item teacher-feedback-color">
+                        <h5 class="font-semibold text-nz-green text-sm">3. Audience/Purpose/Task</h5>
+                        <p id="composition_audience_feedback" class="text-gray-700 mt-1 font-medium"></p>
+                    </div>
+                    <div class="feedback-item teacher-feedback-color">
+                        <h5 class="font-semibold text-nz-green text-sm">4. Genre/Structure</h5>
+                        <p id="composition_genre_feedback" class="text-gray-700 mt-1 font-medium"></p>
+                    </div>
+                    <div class="feedback-item teacher-feedback-color md:col-span-2">
+                        <h5 class="font-semibold text-nz-green text-sm">5. Sentence Structure & Punctuation</h5>
+                        <p id="composition_sentence_feedback" class="text-gray-700 mt-1 font-medium"></p>
+                    </div>
+                    
+                    <!-- PILLAR GROUP 3: WRITING CRAFT -->
+                    <div class="md:col-span-2 pillar-group-header">Pillar 3: Writing Craft (Language & Impact)</div>
+                    <div class="feedback-item teacher-feedback-color">
+                        <h5 class="font-semibold text-nz-green text-sm">6. Word Choices (Vocabulary)</h5>
+                        <p id="composition_word_choice_feedback" class="text-gray-700 mt-1 font-medium"></p>
+                    </div>
+                    <div class="feedback-item teacher-feedback-color">
+                        <h5 class="font-semibold text-nz-green text-sm">7. Language Features/Devices</h5>
+                        <p id="composition_devices_feedback" class="text-gray-700 mt-1 font-medium"></p>
+                    </div>
+                </div>
+
+                <!-- LLM Feature 2: Revision Assistant Button -->
+                <button id="revision-button" onclick="generateRevision()" class="mt-6 w-full px-4 py-2 bg-nz-gold text-nz-green font-semibold rounded-lg hover:bg-yellow-400 transition duration-150 ease-in-out disabled:opacity-50 flex items-center justify-center">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                    ✨ Generate Revision Model
+                </button>
+            </div>
+            
+            <!-- Generated Revision Output -->
+            <div id="revision-output-section" class="bg-white p-6 sm:p-8 rounded-xl card mb-8 hidden">
+                <h3 class="text-xl font-bold mb-3 text-gray-800 flex items-center">
+                    <svg class="w-6 h-6 mr-2 text-nz-green" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+                    Model Revision (Applying Next Steps)
+                </h3>
+                <div id="revision-text" class="bg-nz-light p-4 rounded-lg text-gray-700 leading-relaxed whitespace-pre-wrap"></div>
+                <p id="revision-loading" class="text-center text-sm text-nz-green mt-3 hidden">Generating model revision...</p>
+                <p id="revision-status" class="text-center text-sm text-red-500 mt-1"></p>
+            </div>
+
+            <!-- Student Feedback (2 Stars & 1 Wish) -->
+            <div class="bg-white p-6 sm:p-8 rounded-xl card">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-xl font-bold text-nz-gold flex items-center">
+                        <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13M12 6.253a3 3 0 100-5.228 3 3 0 000 5.228zm0 0h.01"></path></svg>
+                        Student Feedback (2 Stars & 1 Next Step)
+                    </h3>
+                    <!-- LLM Feature 1: TTS Button -->
+                    <button id="tts-button" onclick="playTtsFeedback()" class="px-3 py-1 bg-nz-green text-white text-sm font-semibold rounded-lg hover:bg-opacity-90 transition duration-150 ease-in-out disabled:opacity-50 flex items-center">
+                        <svg class="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.707.707L4.414 13H2a1 1 0 01-1-1V8a1 1 0 011-1h2.414l3.879-3.879A1 1 0 019.383 3.076zM12.707 6.707a1 1 0 011.414 0L17 9.586l-2.879 2.879a1 1 0 01-1.414-1.414L15.172 10l-2.465-2.465a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg>
+                        ✨ Speak
+                    </button>
+                </div>
+                <div id="student-feedback" class="feedback-item student-feedback-color text-gray-700 leading-relaxed min-h-[120px]">
+                    <!-- Structured feedback will be inserted here by JS -->
+                </div>
+                <p id="tts-status" class="text-center text-sm text-red-500 mt-1"></p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
