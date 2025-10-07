@@ -225,7 +225,13 @@
         let imageMimeType = null;
         let studentWritingSample = "";
         
-        const apiKey = "" 
+        // ***************************************************************
+        // CRITICAL STEP: When running on Netlify, you MUST insert your own 
+        // Google AI API Key here to authorize the calls to the Gemini model.
+        // Get your key from Google AI Studio.
+        // ***************************************************************
+        const apiKey = isCanvasEnvironment ? "" : "YOUR_GEMINI_API_KEY_HERE"; // <--- REPLACE THIS VALUE
+        
         const textModel = 'gemini-2.5-flash-preview-05-20';
         const ttsModel = 'gemini-2.5-flash-preview-tts';
         const textApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${textModel}:generateContent?key=${apiKey}`;
@@ -358,7 +364,15 @@
         window.playTtsFeedback = async function() {
             const ttsButton = document.getElementById('tts-button');
             const studentFeedbackElement = document.getElementById('student-feedback');
+            const ttsStatus = document.getElementById('tts-status');
             
+            // Check for API Key
+            if (apiKey === "YOUR_GEMINI_API_KEY_HERE" && !isCanvasEnvironment) {
+                ttsStatus.textContent = "ERROR: TTS requires your Gemini API Key. Please insert it.";
+                return;
+            }
+            ttsStatus.textContent = "";
+
             // Extract text from the structured list items
             const star1 = studentFeedbackElement.querySelector('ul li:nth-child(1) div').textContent.trim();
             const star2 = studentFeedbackElement.querySelector('ul li:nth-child(2) div').textContent.trim();
@@ -366,6 +380,7 @@
             
             if (!star1) {
                 console.error("No student feedback to read.");
+                ttsStatus.textContent = "Please run an assessment first to generate feedback.";
                 return;
             }
 
@@ -423,8 +438,7 @@
 
             } catch (error) {
                 console.error("TTS Error:", error);
-                // Use custom modal or text update instead of alert
-                document.getElementById('tts-status').textContent = "Speech failed. Check console for details.";
+                ttsStatus.textContent = "Speech failed. Check console or API Key.";
             } finally {
                 // Ensure button is re-enabled if an error occurs before audio starts
                 if (ttsButton.textContent === 'Speaking...') {
@@ -441,15 +455,24 @@
             const revisionLoading = document.getElementById('revision-loading');
             const revisionOutput = document.getElementById('revision-output-section');
             const revisionText = document.getElementById('revision-text');
+            const revisionStatus = document.getElementById('revision-status');
             
+            // Check for API Key
+            if (apiKey === "YOUR_GEMINI_API_KEY_HERE" && !isCanvasEnvironment) {
+                revisionStatus.textContent = "ERROR: Revision requires your Gemini API Key. Please insert it.";
+                return;
+            }
+            revisionStatus.textContent = "";
+
+
             const writingSample = document.getElementById('writing-sample').value.trim();
             // Find the most relevant next step from the 7 teacher points, or use the student 'Next Step' as fallback.
-            const nextStepText = document.getElementById('student-feedback').querySelector('ul li:nth-child(3) div').textContent.trim();
+            const nextStepElement = document.getElementById('student-feedback').querySelector('ul li:nth-child(3) div');
+            const nextStepText = nextStepElement ? nextStepElement.textContent.trim() : "";
             const yearLevel = document.getElementById('curriculum-year').value;
 
             if (!writingSample || !nextStepText) {
-                // Use custom modal or text update instead of alert
-                document.getElementById('revision-status').textContent = "Please run the initial assessment first and ensure you have provided the writing sample text.";
+                revisionStatus.textContent = "Please run the initial assessment first and ensure you have provided the writing sample text.";
                 return;
             }
 
@@ -459,7 +482,7 @@
             revisionLoading.classList.remove('hidden');
             revisionOutput.classList.remove('hidden');
             revisionText.textContent = 'Please wait...';
-            document.getElementById('revision-status').textContent = '';
+            revisionStatus.textContent = '';
 
             try {
                 const criteria = curriculumCriteria[yearLevel];
@@ -492,7 +515,7 @@
 
             } catch (error) {
                 console.error("Revision Error:", error);
-                revisionText.textContent = "Error generating revision model. Please try again.";
+                revisionText.textContent = "Error generating revision model. Please check your API Key and try again.";
             } finally {
                 // UI State: Reset
                 revisionButton.disabled = false;
@@ -557,17 +580,24 @@
 
         // --- Main Assessment Function (Updated systemPrompt and save call) ---
         window.handleAssessment = async function() {
+            const assessButton = document.getElementById('assess-button');
+            const loadingMessage = document.getElementById('loading-message');
+            const outputDiv = document.getElementById('assessment-output');
+
+            // Check for API Key
+            if (apiKey === "YOUR_GEMINI_API_KEY_HERE" && !isCanvasEnvironment) {
+                loadingMessage.textContent = "CRITICAL ERROR: Please replace 'YOUR_GEMINI_API_KEY_HERE' with your actual key.";
+                loadingMessage.classList.remove('hidden');
+                return;
+            }
+
             studentWritingSample = document.getElementById('writing-sample').value.trim();
             const yearKey = document.getElementById('curriculum-year').value;
             const textType = document.getElementById('text-type').value; // Now reading from select
             const criteria = curriculumCriteria[yearKey];
             
-            const assessButton = document.getElementById('assess-button');
-            const loadingMessage = document.getElementById('loading-message');
-            const outputDiv = document.getElementById('assessment-output');
             
             if (!base64Image && studentWritingSample.length < 50) {
-                // Use custom modal or text update instead of alert
                 loadingMessage.textContent = "Please provide a photo or paste text of at least 50 words.";
                 loadingMessage.classList.remove('hidden');
                 setTimeout(() => loadingMessage.classList.add('hidden'), 3000);
@@ -700,13 +730,18 @@
 
             } catch (error) {
                 console.error("Assessment Error:", error);
-                // Use custom modal or text update instead of alert
-                loadingMessage.textContent = "Error: Assessment failed. Check console for details or try again.";
+                // Enhanced user-facing error message
+                let userError = "Error: Assessment failed.";
+                if (error.message.includes('400') || error.message.includes('401') || error.message.includes('key')) {
+                    userError += " (API Key/Permission issue. Did you replace 'YOUR_GEMINI_API_KEY_HERE'?)";
+                } else if (error.message.includes('429')) {
+                    userError += " (Too many requests. Try again in a minute.)";
+                }
+                loadingMessage.textContent = userError;
             } finally {
                 // UI State: Reset
                 assessButton.disabled = false;
                 assessButton.textContent = 'Assess Writing';
-                loadingMessage.classList.add('hidden');
             }
         }
     </script>
@@ -875,41 +910,5 @@
 
                 <!-- LLM Feature 2: Revision Assistant Button -->
                 <button id="revision-button" onclick="generateRevision()" class="mt-6 w-full px-4 py-2 bg-nz-gold text-nz-green font-semibold rounded-lg hover:bg-yellow-400 transition duration-150 ease-in-out disabled:opacity-50 flex items-center justify-center">
-                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
-                    ✨ Generate Revision Model
-                </button>
-            </div>
-            
-            <!-- Generated Revision Output -->
-            <div id="revision-output-section" class="bg-white p-6 sm:p-8 rounded-xl card mb-8 hidden">
-                <h3 class="text-xl font-bold mb-3 text-gray-800 flex items-center">
-                    <svg class="w-6 h-6 mr-2 text-nz-green" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
-                    Model Revision (Applying Next Steps)
-                </h3>
-                <div id="revision-text" class="bg-nz-light p-4 rounded-lg text-gray-700 leading-relaxed whitespace-pre-wrap"></div>
-                <p id="revision-loading" class="text-center text-sm text-nz-green mt-3 hidden">Generating model revision...</p>
-                <p id="revision-status" class="text-center text-sm text-red-500 mt-1"></p>
-            </div>
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-
 
-            <!-- Student Feedback (2 Stars & 1 Wish) -->
-            <div class="bg-white p-6 sm:p-8 rounded-xl card">
-                <div class="flex items-center justify-between mb-3">
-                    <h3 class="text-xl font-bold text-nz-gold flex items-center">
-                        <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13M12 6.253a3 3 0 100-5.228 3 3 0 000 5.228zm0 0h.01"></path></svg>
-                        Student Feedback (2 Stars & 1 Next Step)
-                    </h3>
-                    <!-- LLM Feature 1: TTS Button -->
-                    <button id="tts-button" onclick="playTtsFeedback()" class="px-3 py-1 bg-nz-green text-white text-sm font-semibold rounded-lg hover:bg-opacity-90 transition duration-150 ease-in-out disabled:opacity-50 flex items-center">
-                        <svg class="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.707.707L4.414 13H2a1 1 0 01-1-1V8a1 1 0 011-1h2.414l3.879-3.879A1 1 0 019.383 3.076zM12.707 6.707a1 1 0 011.414 0L17 9.586l-2.879 2.879a1 1 0 01-1.414-1.414L15.172 10l-2.465-2.465a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg>
-                        ✨ Speak
-                    </button>
-                </div>
-                <div id="student-feedback" class="feedback-item student-feedback-color text-gray-700 leading-relaxed min-h-[120px]">
-                    <!-- Structured feedback will be inserted here by JS -->
-                </div>
-                <p id="tts-status" class="text-center text-sm text-red-500 mt-1"></p>
-            </div>
-        </div>
-    </div>
-</body>
-</html>
